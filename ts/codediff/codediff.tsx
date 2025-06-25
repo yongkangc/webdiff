@@ -3,11 +3,10 @@ import React from 'react';
 import {DiffRange} from './codes';
 import {closest, copyOnlyMatching, distributeSpans} from './dom-utils';
 import {stringAsLines} from './string-utils';
-import {isLegitKeypress} from '../file_diff';
+import {isLegitKeypress} from '../utils';
 import {DiffRow} from './DiffRow';
 import {SkipRange, SkipRow} from './SkipRow';
-import {FilePair} from '../CodeDiffContainer';
-import {GitConfig} from '../options';
+import {ServerConfig} from '../options';
 
 export interface PatchOptions {
   /** Minimum number of skipped lines to elide into a "jump" row */
@@ -58,14 +57,13 @@ function enforceMinJumpSize(diffs: DiffRange[], minJumpSize: number): DiffRange[
 }
 
 export interface Props {
-  filePair: FilePair;
   beforeText: string | null;
   afterText: string | null;
   ops: DiffRange[];
   params: Partial<PatchOptions>;
 }
 
-declare const GIT_CONFIG: GitConfig;
+declare const SERVER_CONFIG: ServerConfig;
 
 export function CodeDiff(props: Props) {
   const {beforeText, afterText, ops, params} = props;
@@ -84,7 +82,7 @@ export function CodeDiff(props: Props) {
   const numLines = Math.max(beforeLines.length, afterLines.length);
 
   const [beforeLinesHighlighted, afterLinesHighlighted] = React.useMemo(() => {
-    if (!language || numLines > GIT_CONFIG.webdiff.maxLinesForSyntax) return [null, null];
+    if (!language || numLines > SERVER_CONFIG.webdiff.maxLinesForSyntax) return [null, null];
     return [highlightText(beforeText ?? '', language), highlightText(afterText ?? '', language)];
   }, [language, numLines, beforeText, afterText]);
 
@@ -107,7 +105,6 @@ export function CodeDiff(props: Props) {
       beforeLinesHighlighted={beforeLinesHighlighted}
       afterLines={afterLines}
       afterLinesHighlighted={afterLinesHighlighted}
-      filePair={props.filePair}
       params={fullParams}
       ops={diffRanges}
     />
@@ -171,14 +168,12 @@ interface CodeDiffViewProps {
   afterLines: readonly string[];
   beforeLinesHighlighted: readonly string[] | null;
   afterLinesHighlighted: readonly string[] | null;
-  filePair: FilePair;
   params: PatchOptions;
   ops: readonly DiffRange[];
 }
 
 const CodeDiffView = React.memo((props: CodeDiffViewProps) => {
   const {
-    filePair,
     params,
     ops: initOps,
     afterLines,
@@ -246,57 +241,60 @@ const CodeDiffView = React.memo((props: CodeDiffViewProps) => {
     };
   }, [ops, selectedLine]);
 
-  const diffRows = [];
-  for (const range of ops) {
-    const {type} = range;
-    const {before, after} = range;
-    const numBeforeRows = before[1] - before[0];
-    const numAfterRows = after[1] - after[0];
-    const numRows = Math.max(numBeforeRows, numAfterRows);
-    const beforeStartLine = before[0];
-    const afterStartLine = after[0];
-    const isSelected = afterStartLine === selectedLine;
-    if (type == 'skip') {
-      diffRows.push(
-        <SkipRow
-          key={`${beforeStartLine}-${afterStartLine}`}
-          beforeStartLine={beforeStartLine}
-          afterStartLine={afterStartLine}
-          numRows={numRows}
-          header={range.header ?? null}
-          expandLines={expandLines}
-          onShowMore={handleShowMore}
-          isSelected={isSelected}
-        />,
-      );
-    } else {
-      for (let j = 0; j < numRows; j++) {
-        const beforeIdx = j < numBeforeRows ? beforeStartLine + j : null;
-        const afterIdx = j < numAfterRows ? afterStartLine + j : null;
-        const beforeText = beforeIdx !== null ? beforeLines[beforeIdx] : undefined;
-        const beforeHTML =
-          beforeIdx !== null && beforeLinesHighlighted
-            ? beforeLinesHighlighted[beforeIdx]
-            : undefined;
-        const afterText = afterIdx !== null ? afterLines[afterIdx] : undefined;
-        const afterHTML =
-          afterIdx !== null && afterLinesHighlighted ? afterLinesHighlighted[afterIdx] : undefined;
-        diffRows.push(
-          <DiffRow
-            key={`${beforeIdx}-${afterIdx}`}
-            type={type}
-            beforeLineNum={beforeIdx != null ? 1 + beforeIdx : null}
-            afterLineNum={afterIdx != null ? 1 + afterIdx : null}
-            beforeText={beforeText}
-            beforeHTML={beforeHTML}
-            afterText={afterText}
-            afterHTML={afterHTML}
-            isSelected={j === 0 && isSelected}
+  const diffRows = React.useMemo(() => {
+    const rows = [];
+    for (const range of ops) {
+      const {type} = range;
+      const {before, after} = range;
+      const numBeforeRows = before[1] - before[0];
+      const numAfterRows = after[1] - after[0];
+      const numRows = Math.max(numBeforeRows, numAfterRows);
+      const beforeStartLine = before[0];
+      const afterStartLine = after[0];
+      const isSelected = afterStartLine === selectedLine;
+      if (type == 'skip') {
+        rows.push(
+          <SkipRow
+            key={`${beforeStartLine}-${afterStartLine}`}
+            beforeStartLine={beforeStartLine}
+            afterStartLine={afterStartLine}
+            numRows={numRows}
+            header={range.header ?? null}
+            expandLines={expandLines}
+            onShowMore={handleShowMore}
+            isSelected={isSelected}
           />,
         );
+      } else {
+        for (let j = 0; j < numRows; j++) {
+          const beforeIdx = j < numBeforeRows ? beforeStartLine + j : null;
+          const afterIdx = j < numAfterRows ? afterStartLine + j : null;
+          const beforeText = beforeIdx !== null ? beforeLines[beforeIdx] : undefined;
+          const beforeHTML =
+            beforeIdx !== null && beforeLinesHighlighted
+              ? beforeLinesHighlighted[beforeIdx]
+              : undefined;
+          const afterText = afterIdx !== null ? afterLines[afterIdx] : undefined;
+          const afterHTML =
+            afterIdx !== null && afterLinesHighlighted ? afterLinesHighlighted[afterIdx] : undefined;
+          rows.push(
+            <DiffRow
+              key={`${beforeIdx}-${afterIdx}`}
+              type={type}
+              beforeLineNum={beforeIdx != null ? 1 + beforeIdx : null}
+              afterLineNum={afterIdx != null ? 1 + afterIdx : null}
+              beforeText={beforeText}
+              beforeHTML={beforeHTML}
+              afterText={afterText}
+              afterHTML={afterHTML}
+              isSelected={j === 0 && isSelected}
+            />,
+          );
+        }
       }
     }
-  }
+    return rows;
+  }, [ops, beforeLines, afterLines, beforeLinesHighlighted, afterLinesHighlighted, selectedLine, expandLines, handleShowMore]);
 
   const [selectingState, setSelectingState] = React.useState<'left' | 'right' | null>(null);
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -321,40 +319,8 @@ const CodeDiffView = React.memo((props: CodeDiffViewProps) => {
   return (
     <div className={divClassName} onMouseDown={handleMouseDown} onCopy={handleCopy}>
       <table className={tableClassName}>
-        <thead>
-          <HeaderRow filePair={filePair} />
-        </thead>
         <tbody>{diffRows}</tbody>
       </table>
     </div>
   );
 });
-
-function HeaderRow({filePair}: {filePair: FilePair}) {
-  const {a, b, num_add, num_delete} = filePair;
-  const addEl = num_add ? <span className="num-add">+{num_add}</span> : null;
-  const deleteEl = num_delete ? <span className="num-delete">-{num_delete}</span> : null;
-  const deltaEl = (
-    <span className="delta">
-      {deleteEl} {addEl}
-    </span>
-  );
-  return (
-    <tr>
-      {a === b ? (
-        <th className="diff-header combined" colSpan={4}>
-          {a} {deltaEl}
-        </th>
-      ) : (
-        <>
-          <th className="diff-header left" colSpan={2}>
-            {a}
-          </th>
-          <th className="diff-header right" colSpan={2}>
-            {b} {deltaEl}
-          </th>
-        </>
-      )}
-    </tr>
-  );
-}

@@ -37,7 +37,7 @@ const makeCodeTd = (type: string, text: string | undefined, html: string | undef
   return {className, html, text};
 };
 
-export function DiffRow(props: DiffRowProps) {
+function DiffRowImpl(props: DiffRowProps) {
   const {beforeLineNum, afterLineNum, type, isSelected} = props;
   const cells = [
     makeCodeTd(type, props.beforeText, props.beforeHTML),
@@ -71,3 +71,17 @@ export function DiffRow(props: DiffRowProps) {
     </tr>
   );
 }
+
+export const DiffRow = React.memo(DiffRowImpl, (prevProps, nextProps) => {
+  // Only re-render if content or selection actually changed
+  return (
+    prevProps.beforeLineNum === nextProps.beforeLineNum &&
+    prevProps.afterLineNum === nextProps.afterLineNum &&
+    prevProps.beforeText === nextProps.beforeText &&
+    prevProps.afterText === nextProps.afterText &&
+    prevProps.beforeHTML === nextProps.beforeHTML &&
+    prevProps.afterHTML === nextProps.afterHTML &&
+    prevProps.type === nextProps.type &&
+    prevProps.isSelected === nextProps.isSelected
+  );
+});

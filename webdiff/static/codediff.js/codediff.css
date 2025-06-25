@@ -10,6 +10,8 @@ div.diff {
 table.diff {
   width: 100%;
   border-spacing: 0;
+  /* CSS containment for better performance */
+  contain: layout style;
 }
 
 td.code {
@@ -69,7 +71,8 @@ table.diff tr.skip-row td {
 .line-no, .code {
   padding: 2px;
   height: 1.11em;
-  font-family: monospace;
+  font-family: "JetBrains Mono", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-weight: 400;
 }
 .diff .skip {
   text-align: center;

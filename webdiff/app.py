@@ -1,34 +1,27 @@
 #!/usr/bin/env python
-"""Web-based file differ.
-
-For usage, see README.md.
-"""
 
 import dataclasses
-import importlib.metadata
 import json
 import logging
 import mimetypes
 import os
-import platform
-import signal
 import socket
-import subprocess
 import sys
 import threading
 import time
-import webbrowser
+from typing import Optional
 
-import aiohttp
-import aiohttp.web_request
-from aiohttp import web
+from fastapi import FastAPI, Request, Form
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import ClientDisconnect
+from starlette.datastructures import Headers
 from binaryornot.check import is_binary
+import uvicorn
 
-from webdiff import argparser, diff, options, util
-from webdiff.dirdiff import make_resolved_dir
-
-VERSION = importlib.metadata.version('webdiff')
-
+from . import argparser, diff, dirdiff, util
 
 def determine_path():
     """Borrowed from wxglade.py"""
@@ -43,324 +36,375 @@ def determine_path():
         sys.exit()
 
 
-GIT_CONFIG = {}
+SERVER_CONFIG = {}
 DIFF = None
 PORT = None
 HOSTNAME = 'localhost'
 DEBUG = os.environ.get('DEBUG')
-DEBUG_DETACH = os.environ.get('DEBUG_DETACH')
 WEBDIFF_DIR = determine_path()
 
-if DEBUG:
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    handler.setFormatter(formatter)
+class ClientDisconnectMiddleware(BaseHTTPMiddleware):
+    """Middleware to handle client disconnects gracefully."""
+    async def dispatch(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except ClientDisconnect:
+            # Client disconnected, just return a simple response
+            return JSONResponse({'error': 'Client disconnected'}, status_code=499)
 
-    for logname in ['']:
-        log = logging.getLogger(logname)
-        log.setLevel(logging.DEBUG)
-        log.addHandler(handler)
-    logging.getLogger('github').setLevel(logging.ERROR)
-    logging.getLogger('binaryornot').setLevel(logging.ERROR)
+class CachedStaticFiles(StaticFiles):
+    """Static files handler with caching headers."""
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
 
-
-async def handle_index(request: aiohttp.web_request.Request):
-    idx = int(request.match_info.get('idx', '0'))
-    pairs = diff.get_thin_list(DIFF)
-    with open(os.path.join(WEBDIFF_DIR, 'templates/file_diff.html'), 'r') as file:
-        html = file.read()
-        html = html.replace(
-            '{{data}}',
-            json.dumps(
-                {
-                    'idx': idx,
-                    'has_magick': util.is_imagemagick_available(),
-                    'pairs': pairs,
-                    'git_config': GIT_CONFIG,
-                },
-                indent=2,
-            ),
-        )
-        return web.Response(body=html, content_type='text/html', charset='utf-8')
-
-
-async def handle_thick(request: aiohttp.web_request.Request):
-    idx = int(request.match_info.get('idx'))
-    return web.json_response(diff.get_thick_dict(DIFF[idx]))
-
-
-async def handle_get_contents(request: aiohttp.web_request.Request):
-    side = request.match_info['side']
-    form_data = await request.post()
-    path = form_data.get('path', '')
-    if not path:
-        return web.json_response({'error': 'incomplete'}, status=400)
-    should_normalize = form_data.get('normalize_json')
-
-    idx = diff.find_diff_index(DIFF, side, path)
-    if idx is None:
-        return web.json_response({'error': 'not found'}, status=400)
-
-    d = DIFF[idx]
-    abs_path = d.a_path if side == 'a' else d.b_path
-
-    try:
-        if is_binary(abs_path):
-            size = os.path.getsize(abs_path)
-            return web.Response(text=f'Binary file ({size} bytes)')
+        # Set cache headers based on file type
+        if path.endswith(('.js', '.css')):
+            # JavaScript and CSS files: cache for 1 week
+            response.headers['Cache-Control'] = 'public, max-age=604800'
+        elif path.endswith(('.jpg', '.jpeg', '.png', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot')):
+            # Images and fonts: cache for 1 month
+            response.headers['Cache-Control'] = 'public, max-age=2592000'
         else:
-            if should_normalize:
-                abs_path = util.normalize_json(abs_path)
-            return web.FileResponse(abs_path, headers={'Content-Type': 'text/plain'})
-    except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
+            # Other files: cache for 1 hour
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+
+        return response
+
+def create_app(root_path: str = "") -> FastAPI:
+    """Create and configure the FastAPI app with the given root_path."""
+    app = FastAPI(root_path=root_path)
+
+    # Add middlewares
+    app.add_middleware(ClientDisconnectMiddleware)  # Handle client disconnects
+    app.add_middleware(GZipMiddleware)  # Compress responses
+
+    # Mount static files
+    static_dir = os.path.join(WEBDIFF_DIR, 'static')
+    if not os.path.exists(static_dir):
+        # Try to find static dir relative to the package
+        import webdiff
+        webdiff_package_dir = os.path.dirname(webdiff.__file__)
+        static_dir = os.path.join(webdiff_package_dir, 'static')
+
+    app.mount("/static", CachedStaticFiles(directory=static_dir), name="static")
+
+    @app.get("/favicon.ico")
+    async def handle_favicon():
+        favicon_path = os.path.join(WEBDIFF_DIR, 'static/img/favicon.ico')
+
+        # Try alternate path if the primary one doesn't exist
+        if not os.path.exists(favicon_path):
+            import webdiff
+            webdiff_package_dir = os.path.dirname(webdiff.__file__)
+            favicon_path = os.path.join(webdiff_package_dir, 'static/img/favicon.ico')
+
+        return FileResponse(
+            favicon_path,
+            headers={"Cache-Control": "public, max-age=2592000"}  # Cache for 30 days
+        )
 
 
-async def handle_diff_ops(request: aiohttp.web_request.Request):
-    idx = int(request.match_info.get('idx'))
-    payload = await request.json()
-    options = payload.get('options') or []
-    should_normalize = payload.get('normalize_json')
-    logging.debug([*payload.keys()])
-    logging.debug({**payload})
-    extra_args = GIT_CONFIG['webdiff']['extraFileDiffArgs']
-    if extra_args:
-        options += extra_args.split(' ')
-    diff_ops = [
-        dataclasses.asdict(op)
-        for op in diff.get_diff_ops(DIFF[idx], options, normalize_json=should_normalize)
-    ]
-    return web.json_response(diff_ops, status=200)
+    @app.get("/theme.css")
+    async def handle_theme():
+        try:
+            if not SERVER_CONFIG:
+                return JSONResponse({'error': 'SERVER_CONFIG not initialized'}, status_code=500)
+            theme = SERVER_CONFIG.get('webdiff', {}).get('theme', 'googlecode')
+            # Handle both 'googlecode' and 'subfolder/themename' formats
+            if '/' in theme:
+                theme_dir = os.path.dirname(theme)
+                theme_file = os.path.basename(theme)
+            else:
+                theme_dir = ''
+                theme_file = theme
+
+            if theme_dir:
+                theme_path = os.path.join(
+                    WEBDIFF_DIR, 'static/css/themes', theme_dir, theme_file + '.css'
+                )
+            else:
+                theme_path = os.path.join(
+                    WEBDIFF_DIR, 'static/css/themes', theme_file + '.css'
+                )
+
+            # Try alternate path if the primary one doesn't exist
+            if not os.path.exists(theme_path):
+                import webdiff
+                webdiff_package_dir = os.path.dirname(webdiff.__file__)
+                if theme_dir:
+                    theme_path = os.path.join(
+                        webdiff_package_dir, 'static/css/themes', theme_dir, theme_file + '.css'
+                    )
+                else:
+                    theme_path = os.path.join(
+                        webdiff_package_dir, 'static/css/themes', theme_file + '.css'
+                    )
+
+            return FileResponse(theme_path)
+        except Exception as e:
+            logging.error(f"Error in handle_theme: {e}")
+            return JSONResponse({'error': str(e)}, status_code=500)
 
 
-async def handle_theme(request: aiohttp.web_request.Request):
-    theme = GIT_CONFIG['webdiff']['theme']
-    theme_dir = os.path.dirname(theme)
-    theme_file = os.path.basename(theme)
-    theme_path = os.path.join(
-        WEBDIFF_DIR, 'static/css/themes', theme_dir, theme_file + '.css'
-    )
-    return web.FileResponse(theme_path)
+    @app.get("/")
+    @app.get("/{idx}")
+    async def handle_index(request: Request, idx: Optional[int] = None):
+        global DIFF
+        try:
+            index_path = os.path.join(WEBDIFF_DIR, 'templates/file_diff.html')
+
+            # Debug logging
+            if DEBUG:
+                logging.info(f"WEBDIFF_DIR: {WEBDIFF_DIR}")
+                logging.info(f"Looking for template at: {index_path}")
+                logging.info(f"Template exists: {os.path.exists(index_path)}")
+
+            # Try alternate paths if the primary one doesn't exist
+            if not os.path.exists(index_path):
+                # Try to find the template relative to the package
+                import webdiff
+                webdiff_package_dir = os.path.dirname(webdiff.__file__)
+                index_path = os.path.join(webdiff_package_dir, 'templates/file_diff.html')
+
+                if DEBUG:
+                    logging.info(f"Trying package path: {index_path}")
+                    logging.info(f"Template exists at package path: {os.path.exists(index_path)}")
+
+            with open(index_path) as f:
+                html = f.read()
+
+                # Inject the root path into the data
+                data = {
+                    'idx': idx if idx is not None else 0,
+                    'has_magick': util.is_imagemagick_available(),
+                    'pairs': diff.get_thin_list(DIFF),
+                    'server_config': SERVER_CONFIG,
+                    'root_path': app.root_path,
+                }
+
+                html = html.replace(
+                    '{{data}}',
+                    json.dumps(data, indent=2)
+                )
+            return HTMLResponse(content=html)
+        except Exception as e:
+            logging.error(f"Error handling index: {e}")
+            logging.error(f"WEBDIFF_DIR was: {WEBDIFF_DIR}")
+            return JSONResponse({'error': str(e)}, status_code=500)
 
 
-async def handle_favicon(request):
-    return web.FileResponse(os.path.join(WEBDIFF_DIR, 'static/img/favicon.ico'))
 
 
-async def handle_get_image(request: aiohttp.web_request.Request):
-    side = request.match_info.get('side')
-    path = request.match_info.get('path')
-    mime_type, _ = mimetypes.guess_type(path)
-    if not mime_type or not mime_type.startswith('image/'):
-        return web.json_response({'error': 'wrong type'}, status=400)
+    @app.get("/file/{idx}")
+    async def get_file_complete(
+        idx: int,
+        normalize_json: bool = False,
+        options: Optional[str] = None  # Comma-separated diff options
+    ):
+        """Get all data needed to render a file diff in one request."""
+        global DIFF, SERVER_CONFIG
 
-    idx = diff.find_diff_index(DIFF, side, path)
-    if idx is None:
-        return web.json_response({'error': 'not found'}, status=400)
+        # Validate index
+        if idx < 0 or idx >= len(DIFF):
+            return JSONResponse({'error': f'Invalid index {idx}'}, status_code=400)
 
-    d = DIFF[idx]
-    abs_path = d.a_path if side == 'a' else d.b_path
-    return web.FileResponse(abs_path, headers={'Content-Type': mime_type})
+        file_pair = DIFF[idx]
 
+        # Get thick data (metadata)
+        thick_data = diff.get_thick_dict(file_pair)
 
-async def handle_pdiff(request: aiohttp.web_request.Request):
-    idx = int(request.match_info.get('idx'))
-    d = DIFF[idx]
-    try:
-        _, pdiff_image = util.generate_pdiff_image(d.a_path, d.b_path)
-        dilated_image_path = util.generate_dilated_pdiff_image(pdiff_image)
-        return web.FileResponse(dilated_image_path)
-    except util.ImageMagickNotAvailableError:
-        return web.Response(status=501, text='ImageMagick is not available')
-    except util.ImageMagickError as e:
-        return web.Response(status=501, text=f'ImageMagick error {e}')
+        # Prepare response
+        response = {
+            'idx': idx,
+            'thick': thick_data,
+            'content_a': None,
+            'content_b': None,
+            'diff_ops': []
+        }
 
+        # Get content for side A
+        if file_pair.a:
+            try:
+                abs_path_a = file_pair.a_path
+                if is_binary(abs_path_a):
+                    response['content_a'] = f'Binary file ({os.path.getsize(abs_path_a)} bytes)'
+                else:
+                    path_to_read = util.normalize_json(abs_path_a) if normalize_json else abs_path_a
+                    with open(path_to_read, 'r') as f:
+                        response['content_a'] = f.read()
+            except Exception as e:
+                response['content_a'] = f'Error reading file: {str(e)}'
 
-async def handle_pdiff_bbox(request: aiohttp.web_request.Request):
-    idx = int(request.match_info.get('idx'))
-    d = DIFF[idx]
-    try:
-        _, pdiff_image = util.generate_pdiff_image(d.a_path, d.b_path)
-        bbox = util.get_pdiff_bbox(pdiff_image)
-        return web.json_response(bbox, status=200)
-    except util.ImageMagickNotAvailableError:
-        return web.json_response('ImageMagick is not available', status=501)
-    except util.ImageMagickError as e:
-        return web.json_response(f'ImageMagick error {e}', status=501)
+        # Get content for side B
+        if file_pair.b:
+            try:
+                abs_path_b = file_pair.b_path
+                if is_binary(abs_path_b):
+                    response['content_b'] = f'Binary file ({os.path.getsize(abs_path_b)} bytes)'
+                else:
+                    path_to_read = util.normalize_json(abs_path_b) if normalize_json else abs_path_b
+                    with open(path_to_read, 'r') as f:
+                        response['content_b'] = f.read()
+            except Exception as e:
+                response['content_b'] = f'Error reading file: {str(e)}'
 
+        # Get diff operations
+        try:
+            diff_options = options.split(',') if options else []
+            extra_args = SERVER_CONFIG['webdiff'].get('extraFileDiffArgs', '')
+            if extra_args:
+                diff_options += extra_args.split(' ')
 
-async def websocket_handler(request: aiohttp.web_request.Request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
+            diff_ops = [
+                dataclasses.asdict(op)
+                for op in diff.get_diff_ops(file_pair, diff_options, normalize_json=normalize_json)
+            ]
+            response['diff_ops'] = diff_ops
+        except Exception as e:
+            # Still return file contents even if diff fails
+            response['diff_error'] = str(e)
 
-    async for msg in ws:
-        if msg.type == aiohttp.WSMsgType.TEXT:
-            await ws.send_str(msg.data + '/answer')
-        elif msg.type == aiohttp.WSMsgType.ERROR:
-            print('ws connection closed with exception %s' % ws.exception())
+        return JSONResponse(response)
 
-    maybe_shutdown()
-    return ws
+    @app.get("/{side}/image/{path:path}")
+    async def handle_get_image(side: str, path: str):
+        global DIFF
+        mime_type, _ = mimetypes.guess_type(path)
+        if not mime_type or not mime_type.startswith('image/'):
+            return JSONResponse({'error': 'wrong type'}, status_code=400)
 
+        idx = diff.find_diff_index(DIFF, side, path)
+        if idx is None:
+            return JSONResponse({'error': 'not found'}, status_code=400)
 
-@web.middleware
-async def request_time_middleware(request, handler):
-    note_request_time()
-    response = await handler(request)
-    return response
-
-
-app = web.Application(middlewares=[request_time_middleware])
-app.add_routes(
-    [
-        web.get('/', handle_index),
-        web.get(r'/{idx:\d+}', handle_index),
-        web.get('/favicon.ico', handle_favicon),
-        web.get('/theme.css', handle_theme),
-        web.static('/static', os.path.join(WEBDIFF_DIR, 'static')),
-        web.get(r'/thick/{idx:\d+}', handle_thick),
-        web.post(r'/{side:a|b}/get_contents', handle_get_contents),
-        web.post(r'/diff/{idx:\d+}', handle_diff_ops),
-        # Image diffs
-        web.get(r'/{side:a|b}/image/{path:.*}', handle_get_image),
-        web.get(r'/pdiff/{idx:\d+}', handle_pdiff),
-        web.get(r'/pdiffbbox/{idx:\d+}', handle_pdiff_bbox),
-        # Websocket for detecting when the tab is closed
-        web.get('/ws', websocket_handler),
-    ]
-)
-
-
-def note_request_time():
-    global LAST_REQUEST_MS
-    LAST_REQUEST_MS = time.time() * 1000
+        d = DIFF[idx]
+        abs_path = d.a_path if side == 'a' else d.b_path
+        return FileResponse(abs_path, media_type=mime_type)
 
 
-def open_browser():
-    global PORT
-    global HOSTNAME
-    global GIT_CONFIG
-    if not os.environ.get('WEBDIFF_NO_OPEN') and GIT_CONFIG['webdiff']['openBrowser']:
-        webbrowser.open_new_tab('http://%s:%s' % (HOSTNAME, PORT))
+    @app.get("/pdiff/{idx}")
+    async def handle_pdiff(idx: int):
+        global DIFF
+        d = DIFF[idx]
+        try:
+            _, pdiff_image = util.generate_pdiff_image(d.a_path, d.b_path)
+            dilated_image_path = util.generate_dilated_pdiff_image(pdiff_image)
+            return FileResponse(dilated_image_path)
+        except util.ImageMagickNotAvailableError:
+            return Response(content='ImageMagick is not available', status_code=501)
+        except util.ImageMagickError as e:
+            return Response(content=f'ImageMagick error {e}', status_code=501)
 
 
-def usage_and_die():
-    sys.stderr.write(argparser.USAGE)
-    sys.exit(1)
+    @app.get("/pdiffbbox/{idx}")
+    async def handle_pdiff_bbox(idx: int):
+        global DIFF
+        d = DIFF[idx]
+        try:
+            _, pdiff_image = util.generate_pdiff_image(d.a_path, d.b_path)
+            bbox = util.get_pdiff_bbox(pdiff_image)
+            return JSONResponse(bbox)
+        except util.ImageMagickNotAvailableError:
+            return JSONResponse('ImageMagick is not available', status_code=501)
+        except util.ImageMagickError as e:
+            return JSONResponse(f'ImageMagick error {e}', status_code=501)
+
+    return app
+
+
+
 
 
 def random_port():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('localhost', 0))
+    sock.bind(('', 0))
     port = sock.getsockname()[1]
     sock.close()
     return port
 
 
-def pick_a_port(args, webdiff_config):
-    if 'port' in args:
-        return args['port']
-
-    env_port = os.environ.get('WEBDIFF_PORT')
-    if env_port:
-        return int(env_port)
-
-    # gitconfig
+def find_port(webdiff_config):
     if webdiff_config['port'] != -1:
         return webdiff_config['port']
-
     return random_port()
 
 
-def run_http():
-    threading.Timer(0.1, open_browser).start()
-    web.run_app(app, host=HOSTNAME, port=PORT, print=print if DEBUG else None)
-    logging.debug('http server shut down')
-
-
-def maybe_shutdown():
-    """Wait a second for new requests, then shut down the server."""
-    last_ms = LAST_REQUEST_MS
-
-    def shutdown():
-        if LAST_REQUEST_MS <= last_ms:  # subsequent requests abort shutdown
-            logging.debug('Shutting down...')
-            signal.raise_signal(signal.SIGINT)
-        else:
-            logging.debug('Received subsequent request; shutdown aborted.')
-
-    logging.debug(
-        'Received request to shut down; waiting 500ms for subsequent requests...'
-    )
-    threading.Timer(0.5, shutdown).start()
-
-
 def run():
-    global DIFF, PORT, HOSTNAME, GIT_CONFIG
+    global DIFF, PORT, HOSTNAME, SERVER_CONFIG
     try:
-        parsed_args = argparser.parse(sys.argv[1:], VERSION)
+        parsed_args = argparser.parse(sys.argv[1:])
     except argparser.UsageError as e:
         sys.stderr.write('Error: %s\n\n' % e)
-        usage_and_die()
+        sys.stderr.write(argparser.USAGE)
+        sys.exit(1)
 
-    GIT_CONFIG = options.get_config()
-    WEBDIFF_CONFIG = GIT_CONFIG['webdiff']
-    DIFF = argparser.diff_for_args(parsed_args, WEBDIFF_CONFIG)
+    SERVER_CONFIG = parsed_args['config']
+    WEBDIFF_CONFIG = SERVER_CONFIG['webdiff']
+    HOSTNAME = parsed_args.get('host', 'localhost')
+    PORT = find_port(WEBDIFF_CONFIG)
 
-    if DEBUG:
-        sys.stderr.write('Invoked as: %s\n' % sys.argv)
-        sys.stderr.write('Args: %s\n' % parsed_args)
-        sys.stderr.write('Diff: %s\n' % DIFF)
-        sys.stderr.write('GitConfig: %s\n' % GIT_CONFIG)
+    if parsed_args.get('port') and parsed_args['port'] != -1:
+        PORT = parsed_args['port']
 
-    PORT = pick_a_port(parsed_args, WEBDIFF_CONFIG)
-    HOSTNAME = (
-        parsed_args.get('host')
-        or os.environ.get('WEBDIFF_HOST')
-        or WEBDIFF_CONFIG['host']
-    )
-    if HOSTNAME == '<hostname>':
-        _hostname = platform.node()
-        # platform.node will return empty string if it can't find the hostname
-        if not _hostname:
-            sys.stderr.write('Warning: hostname could not be determined\n')
-        else:
-            HOSTNAME = _hostname
-
-    run_in_process = os.environ.get('WEBDIFF_RUN_IN_PROCESS') or (
-        DEBUG and not DEBUG_DETACH
-    )
-
-    if not os.environ.get('WEBDIFF_LOGGED_MESSAGE'):
-        # Printing this in the main process gives you your prompt back more cleanly.
-        print(
-            """Serving diffs on http://%s:%s
-Close the browser tab when you're done to terminate the process."""
-            % (HOSTNAME, PORT)
-        )
-        os.environ['WEBDIFF_LOGGED_MESSAGE'] = '1'
-
-    if run_in_process:
-        run_http()
+    if 'dirs' in parsed_args:
+        DIFF = dirdiff.gitdiff(*parsed_args['dirs'], WEBDIFF_CONFIG)
+    elif 'files' in parsed_args:
+        a_file, b_file = parsed_args['files']
+        DIFF = [argparser._shim_for_file_diff(a_file, b_file)]
     else:
-        os.environ['WEBDIFF_RUN_IN_PROCESS'] = '1'
-        os.environ['WEBDIFF_PORT'] = str(PORT)
-        if os.environ.get('WEBDIFF_FROM_GIT_DIFFTOOL'):
-            # git difftool will clean up these directories when we detach.
-            # To make them accessible to the child process, we make a (shallow) copy.
-            assert 'dirs' in parsed_args
-            dir_a, dir_b = parsed_args['dirs']
-            copied_dir_a = make_resolved_dir(dir_a)
-            copied_dir_b = make_resolved_dir(dir_b)
-            os.environ['WEBDIFF_DIR_A'] = copied_dir_a
-            os.environ['WEBDIFF_DIR_B'] = copied_dir_b
-            logging.debug(f'Copied {dir_a} -> {copied_dir_a} before detaching')
-            logging.debug(f'Copied {dir_b} -> {copied_dir_b} before detaching')
-        subprocess.Popen((sys.executable, *sys.argv))
+        # Git difftool mode
+        if len(sys.argv) == 3:
+            DIFF = [argparser._shim_for_file_diff(sys.argv[1], sys.argv[2])]
+        else:
+            DIFF = []
+
+    # Get root_path from config
+    root_path = WEBDIFF_CONFIG.get('rootPath', '')
+
+    # Create app with root_path
+    app = create_app(root_path)
+
+    logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s', level=logging.DEBUG)
+
+    if root_path:
+        print(f"Starting webdiff server at http://{HOSTNAME}:{PORT}{root_path}")
+    else:
+        print(f"Starting webdiff server at http://{HOSTNAME}:{PORT}")
+
+    # Get timeout value from parsed args
+    timeout = parsed_args.get('timeout', 0)
+
+    # Create server configuration
+    config = uvicorn.Config(
+        app,
+        host=HOSTNAME,
+        port=PORT,
+        log_level="info" if DEBUG else "error",
+        # Performance optimizations
+        limit_concurrency=1000,  # Allow more concurrent connections
+        timeout_keep_alive=75,   # Keep connections alive longer
+    )
+    server = uvicorn.Server(config)
+
+    if timeout > 0:
+        print(f"Server will automatically shut down after {timeout} minutes")
+
+        def shutdown_timer():
+            time.sleep(timeout * 60)  # Convert minutes to seconds
+            print(f"\nTimeout reached ({timeout} minutes). Shutting down server...")
+            server.should_exit = True
+
+        # Start the shutdown timer in a daemon thread
+        timer_thread = threading.Thread(target=shutdown_timer, daemon=True)
+        timer_thread.start()
+
+    # Run server with graceful shutdown handling
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run()

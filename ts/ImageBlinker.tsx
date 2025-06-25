@@ -1,6 +1,6 @@
 import React from 'react';
 import {AnnotatedImage} from './AnnotatedImage';
-import {isLegitKeypress} from './file_diff';
+import {isLegitKeypress} from './utils';
 import {ImageDiffProps} from './ImageDiff';
 
 /**

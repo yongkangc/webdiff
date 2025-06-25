@@ -20,23 +20,7 @@ class ImageMagickError(Exception):
     pass
 
 
-# TODO: replace with functools.lru_cache
-# via https://wiki.python.org/moin/PythonDecoratorLibrary#Memoize
-def memoize(obj):
-    """Decorator to memoize a function."""
-    cache = obj.cache = {}
-
-    @functools.wraps(obj)
-    def memoizer(*args, **kwargs):
-        key = str(args) + str(kwargs)
-        if key not in cache:
-            cache[key] = obj(*args, **kwargs)
-        return cache[key]
-
-    return memoizer
-
-
-@memoize
+@functools.lru_cache(maxsize=128)
 def contentHash(path):
     return hashlib.sha512(open(path, mode='rb').read()).digest()
 
@@ -60,7 +44,7 @@ def image_metadata(path):
         return md
 
 
-@memoize
+@functools.lru_cache(maxsize=1)
 def is_imagemagick_available():
     try:
         # this swallows stdout/stderr
@@ -70,7 +54,7 @@ def is_imagemagick_available():
     return True
 
 
-@memoize
+@functools.lru_cache(maxsize=128)
 def generate_pdiff_image(before_path, after_path):
     """Generate a perceptual diff between the before/after images.
 
@@ -115,7 +99,7 @@ def generate_pdiff_image(before_path, after_path):
     return False, diff_path
 
 
-@memoize
+@functools.lru_cache(maxsize=128)
 def generate_dilated_pdiff_image(diff_path):
     """Given a pdiff image, dilate it to highlight small differences."""
     if not is_imagemagick_available():
@@ -143,7 +127,7 @@ def generate_dilated_pdiff_image(diff_path):
     return diff_dilate_path
 
 
-@memoize
+@functools.lru_cache(maxsize=128)
 def get_pdiff_bbox(diff_path):
     """Returns {top,left,width,height} for the content of a pdiff."""
     if not is_imagemagick_available():
@@ -165,7 +149,7 @@ def get_pdiff_bbox(diff_path):
     }
 
 
-@memoize
+@functools.lru_cache(maxsize=128)
 def normalize_json(in_path: str):
     with open(in_path) as f:
         try:

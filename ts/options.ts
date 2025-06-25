@@ -5,8 +5,8 @@ import {
   gitDiffOptionsToFlags,
 } from './diff-options';
 
-/** Type of global git_config object */
-export interface GitConfig {
+/** Type of global server_config object */
+export interface ServerConfig {
   webdiff: WebdiffConfig;
   'webdiff.colors': ColorsConfig;
   diff: {
@@ -32,10 +32,10 @@ export interface ColorsConfig {
   charDelete: string;
 }
 
-declare const GIT_CONFIG: GitConfig;
+declare const SERVER_CONFIG: ServerConfig;
 
 export function injectStylesFromConfig() {
-  const colors = GIT_CONFIG['webdiff.colors'];
+  const colors = SERVER_CONFIG['webdiff.colors'];
   document.write(`
   <style>
   .diff .delete, .before.replace {
@@ -73,7 +73,7 @@ export function encodeOptions(options: Partial<Options>) {
   const {maxDiffWidth, normalizeJSON, ...diffOptions} = options;
   const flags = gitDiffOptionsToFlags(diffOptions);
   const params = new URLSearchParams(flags.map(f => ['flag', f]));
-  if (maxDiffWidth !== undefined && maxDiffWidth !== GIT_CONFIG.webdiff.maxDiffWidth) {
+  if (maxDiffWidth !== undefined && maxDiffWidth !== SERVER_CONFIG.webdiff.maxDiffWidth) {
     params.set('width', String(maxDiffWidth));
   }
   if (normalizeJSON) {

@@ -7,7 +7,7 @@ Diff objects must have these properties:
     - b_path (like a_path)
     - type   One of {'change', 'move', 'add', 'delete'}
 
-For concrete implementations, see githubdiff and localfilediff.
+For concrete implementations, see localfilediff.
 """
 
 import logging

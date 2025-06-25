@@ -69,3 +69,18 @@ export function assertUnreachable(x: never): never {
 export type Unionize<T extends object> = {
   [k in keyof T]: {k: k; v: T[k]};
 }[keyof T];
+
+// Useful for avoiding capturing keyboard shortcuts and text entry.
+export function isLegitKeypress(e: KeyboardEvent) {
+  const target = e.target as Element;
+  if (
+    e.ctrlKey ||
+    e.altKey ||
+    e.metaKey ||
+    target.tagName.toLowerCase() == 'input' ||
+    target.tagName.toLowerCase() == 'textarea'
+  ) {
+    return false;
+  }
+  return true;
+}

@@ -4,11 +4,11 @@ import {DiffBox, ImageFilePair} from './CodeDiffContainer';
 import {PerceptualDiffMode} from './DiffView';
 import {ImageDiffMode, ImageDiffModeSelector} from './ImageDiffModeSelector';
 import {NoChanges} from './CodeDiffContainer';
-import {isOneSided, isSameSizeImagePair} from './utils';
+import {isOneSided, isSameSizeImagePair, isLegitKeypress} from './utils';
 import {ImageSideBySide} from './ImageSideBySide';
 import {ImageBlinker} from './ImageBlinker';
 import {ImageOnionSkin, ImageSwipe} from './ImageSwipe';
-import {isLegitKeypress} from './file_diff';
+import {apiUrl} from './api-utils';
 
 declare const HAS_IMAGE_MAGICK: boolean;
 
@@ -48,7 +48,7 @@ export function ImageDiff(props: Props) {
     if (!isSameSizeImagePair(fp)) return;
     // TODO(danvk): restructure this, it's a mess
     (async () => {
-      const response = await fetch(`/pdiffbbox/${fp.idx}`);
+      const response = await fetch(apiUrl(`/pdiffbbox/${fp.idx}`));
       const bbox = (await response.json()) as DiffBox;
       const {diffData} = fp;
       // XXX are there other fields?

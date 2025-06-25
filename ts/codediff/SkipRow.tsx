@@ -15,7 +15,7 @@ export interface SkipRowProps extends SkipRange {
   isSelected: boolean;
 }
 
-export function SkipRow(props: SkipRowProps) {
+function SkipRowImpl(props: SkipRowProps) {
   const {expandLines, header, onShowMore, isSelected, ...range} = props;
   const {numRows} = range;
   const showAll = (e: React.MouseEvent) => {
@@ -70,3 +70,16 @@ export function SkipRow(props: SkipRowProps) {
     </tr>
   );
 }
+
+export const SkipRow = React.memo(SkipRowImpl, (prevProps, nextProps) => {
+  // Only re-render if props actually changed
+  return (
+    prevProps.beforeStartLine === nextProps.beforeStartLine &&
+    prevProps.afterStartLine === nextProps.afterStartLine &&
+    prevProps.numRows === nextProps.numRows &&
+    prevProps.header === nextProps.header &&
+    prevProps.expandLines === nextProps.expandLines &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.onShowMore === nextProps.onShowMore
+  );
+});

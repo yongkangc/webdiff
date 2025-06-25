@@ -2,9 +2,8 @@ import React from 'react';
 
 import {DiffAlgorithm, gitDiffOptionsToFlags} from './diff-options';
 import {PageCover} from './codediff/PageCover';
-import {isLegitKeypress} from './file_diff';
+import {isLegitKeypress, Unionize} from './utils';
 import {Options, UpdateOptionsFn} from './options';
-import {Unionize} from './utils';
 
 export interface Props {
   options: Partial<Options>;
@@ -13,18 +12,6 @@ export interface Props {
   isVisible: boolean;
   setIsVisible: (isVisible: boolean) => void;
 }
-
-const gearStyle: React.CSSProperties = {
-  position: 'sticky',
-  float: 'right',
-  marginTop: -10,
-  zIndex: 1,
-  top: 0,
-  border: 0,
-  fontSize: 'large',
-  background: 'transparent',
-  cursor: 'pointer',
-};
 
 const closeButtonStyle: React.CSSProperties = {
   position: 'absolute',
@@ -92,9 +79,6 @@ export function DiffOptionsControl(props: Props) {
 
   return (
     <>
-      <button style={gearStyle} onClick={togglePopup}>
-        ⚙
-      </button>
       {isVisible ? (
         <>
           <PageCover onClick={togglePopup} />

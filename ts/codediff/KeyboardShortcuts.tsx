@@ -54,19 +54,10 @@ export function KeyboardShortcuts(props: KeyboardShortcutsProps) {
           <p className="header">Webdiff Keyboard Shortcuts</p>
           <ul>
             <li>
-              <kbd>j</kbd> Next File
-            </li>
-            <li>
-              <kbd>k</kbd> Previous File
-            </li>
-            <li>
               <kbd>n</kbd> Next Diffhunk
             </li>
             <li>
               <kbd>p</kbd> Previous Diffhunk
-            </li>
-            <li>
-              <kbd>v</kbd> Toggle file list / dropdown menu
             </li>
             <li>
               <kbd>z</kbd> Normalize JSON

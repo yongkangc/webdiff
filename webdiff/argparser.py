@@ -2,9 +2,7 @@
 
 import argparse
 import os
-import re
 
-from webdiff import dirdiff, github_fetcher, githubdiff
 from webdiff.localfilediff import LocalFileDiff
 
 
@@ -14,70 +12,113 @@ class UsageError(Exception):
 
 USAGE = """Usage: webdiff <left_dir> <right_dir>
        webdiff <left_file> <right_file>
-       webdiff https://github.com/<owner>/<repo>/pull/<num>
 
 Or run "git webdiff" from a git repository.
 """
 
-# e.g. https://github.com/danvk/dygraphs/pull/292
-PULL_REQUEST_RE = re.compile(
-    r'http[s]://(?:www.)?github.com/([^/]+)/([^/]+)/pull/([0-9]+)(?:/.*)?'
-)
-PULL_REQUEST_NUM_RE = re.compile(r'^#([0-9]+)$')
 
-
-def parse(args, version=None):
-    """Returns {port, dirs: [], files: [], pr: {owner, repo, number}}."""
+def parse(args):
     parser = argparse.ArgumentParser(description='Run webdiff.', usage=USAGE)
-    parser.add_argument('--version', action='version', version='webdiff %s' % version)
     parser.add_argument(
         '--host',
         type=str,
         help='Host name on which to serve webdiff UI. Default is localhost.',
-        default=None,
+        default='localhost',
     )
     parser.add_argument(
         '--port', '-p', type=int, help='Port to run webdiff on.', default=-1
     )
     parser.add_argument(
+        '--root-path', type=str, help='Root path for the application (e.g., /webdiff).', default=''
+    )
+    parser.add_argument(
+        '--timeout', type=int, help='Automatically shut down the server after this many minutes.', default=0
+    )
+
+    # Webdiff configuration options
+    parser.add_argument(
+        '--unified', type=int, help='Number of unified context lines.', default=8
+    )
+    parser.add_argument(
+        '--extra-dir-diff-args', type=str, help='Extra arguments for directory diff.', default=''
+    )
+    parser.add_argument(
+        '--extra-file-diff-args', type=str, help='Extra arguments for file diff.', default=''
+    )
+    parser.add_argument(
+        '--max-diff-width', type=int, help='Maximum width for diff display.', default=160
+    )
+    parser.add_argument(
+        '--theme', type=str, help='Color theme for syntax highlighting.', default='googlecode'
+    )
+    parser.add_argument(
+        '--max-lines-for-syntax', type=int, help='Maximum lines for syntax highlighting.', default=25000
+    )
+
+    # Diff algorithm option
+    parser.add_argument(
+        '--diff-algorithm', type=str, help='Diff algorithm to use.',
+        choices=['myers', 'minimal', 'patience', 'histogram'], default=None
+    )
+
+    # Color configuration options
+    parser.add_argument(
+        '--color-insert', type=str, help='Background color for inserted lines.', default='#efe'
+    )
+    parser.add_argument(
+        '--color-delete', type=str, help='Background color for deleted lines.', default='#fee'
+    )
+    parser.add_argument(
+        '--color-char-insert', type=str, help='Background color for inserted characters.', default='#cfc'
+    )
+    parser.add_argument(
+        '--color-char-delete', type=str, help='Background color for deleted characters.', default='#fcc'
+    )
+
+    parser.add_argument(
         'dirs',
         type=str,
-        nargs='+',
-        help='Directories to diff, or a github pull request URL.',
+        nargs='*',
+        help='Directories or files to diff.',
     )
     args = parser.parse_args(args=args)
 
+    # Build configuration structure compatible with old git config format
+    config = {
+        'webdiff': {
+            'unified': args.unified,
+            'extraDirDiffArgs': args.extra_dir_diff_args,
+            'extraFileDiffArgs': args.extra_file_diff_args,
+            'port': args.port,
+            'host': args.host,
+            'rootPath': args.root_path,
+            'maxDiffWidth': args.max_diff_width,
+            'theme': args.theme,
+            'maxLinesForSyntax': args.max_lines_for_syntax,
+        },
+        'webdiff.colors': {
+            'insert': args.color_insert,
+            'delete': args.color_delete,
+            'charInsert': args.color_char_insert,
+            'charDelete': args.color_char_delete,
+        },
+        'diff': {
+            'algorithm': args.diff_algorithm,
+        }
+    }
+
     # TODO: convert out to a dataclass
-    out = {}
-    if args.port != -1:
-        out['port'] = args.port
-    if args.host:
-        out['host'] = args.host
+    out = {
+        'config': config,
+        'port': args.port,
+        'host': args.host,
+        'timeout': args.timeout,
+    }
 
     if len(args.dirs) > 2:
         raise UsageError('You must specify two files/dirs (got %d)' % len(args.dirs))
 
-    if len(args.dirs) == 1:
-        # must be a github pull request URL
-        owner, repo, num = None, None, None
-        m = re.match(PULL_REQUEST_RE, args.dirs[0])
-        if m:
-            owner, repo, num = m.groups()
-
-        # Or perhaps something simpler like '#292'?
-        m = re.match(PULL_REQUEST_NUM_RE, args.dirs[0])
-        if m:
-            num = m.group(1)
-            owner, repo, num = github_fetcher.get_pr_repo(int(num))
-
-        if not owner:
-            raise UsageError(
-                'You must either specify two files, two '
-                'directories or a github pull request URL/#number'
-            )
-        out['github'] = {'owner': owner, 'repo': repo, 'num': int(num)}
-
-    else:
+    if len(args.dirs) == 2:
         a, b = args.dirs
         if os.environ.get('WEBDIFF_DIR_A') and os.environ.get('WEBDIFF_DIR_B'):
             # This happens when you run "git webdiff" and we have to make a copy of
@@ -114,17 +155,3 @@ def _shim_for_file_diff(a_file, b_file):
         b_path=b_file,
         is_move=False,  # probably not a move
     )
-
-
-def diff_for_args(args, webdiff_config):
-    """Returns a list of Diff objects for parsed command line args."""
-    if 'dirs' in args:
-        # return dirdiff.diff(*args['dirs'])
-        return dirdiff.gitdiff(*args['dirs'], webdiff_config)
-
-    if 'files' in args:
-        return [_shim_for_file_diff(*args['files'])]
-
-    if 'github' in args:
-        gh = args['github']
-        return githubdiff.fetch_pull_request(gh['owner'], gh['repo'], gh['num'])

@@ -2,6 +2,7 @@ import React from 'react';
 import {ImageFilePair} from './CodeDiffContainer';
 import {PerceptualDiffMode} from './DiffView';
 import {assertUnreachable, isSameSizeImagePair} from './utils';
+import {apiUrl} from './api-utils';
 
 // XXX should this just be a component?
 
@@ -37,7 +38,7 @@ export function makePerceptualBoxDiv(
     const styles = {top: 0, left: 0};
     const width = filePair.image_a.width * scaleDown;
     const height = filePair.image_a.height * scaleDown;
-    const src = `/pdiff/${filePair.idx}`;
+    const src = apiUrl(`/pdiff/${filePair.idx}`);
     return (
       <img
         className="perceptual-diff pixels"

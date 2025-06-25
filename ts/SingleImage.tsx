@@ -2,6 +2,7 @@ import _ from 'lodash';
 import React from 'react';
 import {ImageDiffProps} from './ImageDiff';
 import {makePerceptualBoxDiv} from './image_utils';
+import {apiUrl} from './api-utils';
 
 export interface Props extends ImageDiffProps {
   maxWidth: number | null;
@@ -14,7 +15,7 @@ export function SingleImage(props: Props) {
     return null; // or: return empty <img> same size as other image?
   }
 
-  const url = side == 'a' ? '/a/image/' + filePair.a : '/b/image/' + filePair.b;
+  const url = side == 'a' ? apiUrl('/a/image/' + filePair.a) : apiUrl('/b/image/' + filePair.b);
   const im = _.clone(side === 'a' ? filePair.image_a : filePair.image_b);
   let scaleDown = 1.0;
   const {maxWidth} = props;

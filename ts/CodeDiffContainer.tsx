@@ -1,8 +1,8 @@
 import React from 'react';
-import {GitDiffOptions, gitDiffOptionsToFlags} from './diff-options';
+import {GitDiffOptions} from './diff-options';
 import {CodeDiff, PatchOptions} from './codediff/codediff';
 import {guessLanguageUsingContents, guessLanguageUsingFileName} from './codediff/language';
-import {GitConfig} from './options';
+import {ServerConfig} from './options';
 import {DiffRange} from './codediff/codes';
 
 interface BaseFilePair {
@@ -68,67 +68,28 @@ export function NoChanges(props: {filePair: FilePair; isEqualAfterNormalization:
   return msg ? <div className="no-changes">{msg}</div> : null;
 }
 
-// Either side can be empty (i.e. an add or a delete), in which case getOrNull resolves to null.
-async function getOrNull(side: string, path: string, normalizeJSON: boolean) {
-  if (!path) return null;
-  const data = new URLSearchParams();
-  data.set('path', path);
-  if (normalizeJSON) {
-    data.set('normalize_json', '1');
-  }
-  const response = await fetch(`/${side}/get_contents`, {
-    method: 'post',
-    body: data,
-  });
-  return response.text();
-}
 
 export interface CodeDiffContainerProps {
   filePair: FilePair;
   diffOptions: Partial<GitDiffOptions>;
   normalizeJSON: boolean;
+  preloadedData: {
+    content_a: string | null;
+    content_b: string | null;
+    diff_ops: DiffRange[];
+  };
 }
 
 // A side-by-side diff of source code.
 export function CodeDiffContainer(props: CodeDiffContainerProps) {
-  const {filePair, diffOptions, normalizeJSON} = props;
-  const [contents, setContents] = React.useState<
-    {before: string | null; after: string | null; diffOps: DiffRange[]} | undefined
-  >();
-
-  React.useEffect(() => {
-    // It would be more correct to set contents=undefined here to get a loading state,
-    // but this produces an unnecessary flash for rapid transitions.
-    const getDiff = async () => {
-      const response = await fetch(`/diff/${filePair.idx}`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          options: gitDiffOptionsToFlags(diffOptions),
-          normalize_json: normalizeJSON,
-        }),
-      });
-      return response.json() as Promise<DiffRange[]>;
-    };
-
-    const {a, b} = filePair;
-    // Do XHRs for the contents of both sides in parallel and fill in the diff.
-    // TODO: split these into three useEffects to avoid over-fetching when diff options change.
-    (async () => {
-      const [before, after, diffOps] = await Promise.all([
-        getOrNull('a', a, normalizeJSON),
-        getOrNull('b', b, normalizeJSON),
-        getDiff(),
-      ]);
-      setContents({before, after, diffOps});
-    })().catch((e: unknown) => {
-      alert('Unable to get diff!');
-      console.error(e);
-    });
-  }, [filePair, diffOptions, normalizeJSON]);
+  const {filePair, normalizeJSON, preloadedData} = props;
+  
+  // Use the preloaded data directly - it's always available from DiffView
+  const contents = {
+    before: preloadedData.content_a,
+    after: preloadedData.content_b,
+    diffOps: preloadedData.diff_ops
+  };
 
   const isEqualAfterNormalization = React.useMemo(() => {
     return !filePair.no_changes && normalizeJSON && contents && contents.before == contents.after;
@@ -166,7 +127,7 @@ function extractFilename(path: string) {
   return parts[parts.length - 1];
 }
 const HIGHLIGHT_BLACKLIST = ['TODO', 'README', 'NOTES'];
-declare const GIT_CONFIG: GitConfig;
+declare const SERVER_CONFIG: ServerConfig;
 
 function lengthOrZero(data: unknown[] | string | null | undefined) {
   return data?.length ?? 0;
@@ -189,7 +150,7 @@ function FileDiff(props: FileDiffProps) {
     if (
       !language &&
       !HIGHLIGHT_BLACKLIST.includes(extractFilename(path)) &&
-      numLines < GIT_CONFIG.webdiff.maxLinesForSyntax
+      numLines < SERVER_CONFIG.webdiff.maxLinesForSyntax
     ) {
       let byLength = [contentsBefore, contentsAfter];
       if (contentsAfter && lengthOrZero(contentsAfter) > lengthOrZero(contentsBefore)) {
@@ -214,7 +175,6 @@ function FileDiff(props: FileDiffProps) {
       <CodeDiff
         beforeText={contentsBefore}
         afterText={contentsAfter}
-        filePair={filePair}
         ops={diffOps}
         params={opts}
       />

@@ -3,30 +3,41 @@
 <head>
   <title>Diff</title>
 
-  <script src="/static/js/highlight.min.js"></script>
-  <link rel="stylesheet" href="/theme.css">
+  <script src="./static/js/highlight.min.js"></script>
+  <link rel="stylesheet" href="./theme.css">
 
-  <link rel="stylesheet" href="/static/codediff.js/codediff.css">
+  <link rel="stylesheet" href="./static/codediff.js/codediff.css">
 
-  <link href='/static/css/inconsolata.css' rel='stylesheet'>
+  <link href='./static/css/jetbrains-mono.css' rel='stylesheet'>
 
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="./static/css/style.css">
 
 </head>
 
 <body>
+<!-- SVG sprite definitions -->
+<svg style="display: none;">
+  <defs>
+    <symbol id="copy-icon" viewBox="0 0 16 16">
+      <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>
+      <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/>
+    </symbol>
+  </defs>
+</svg>
+
 <div class="container">
   <div id="application"></div>
 </div>
 </body>
 
 <script>
-var {pairs, idx, has_magick, git_config} = {{data}};
+var {pairs, idx, has_magick, server_config, root_path} = {{data}};
 var initialIdx = idx;
 var HAS_IMAGE_MAGICK = has_magick;
-var GIT_CONFIG = git_config;
+var SERVER_CONFIG = server_config;
+var ROOT_PATH = root_path;
 </script>
 
-<script src="/static/js/file_diff.js"></script>
+<script src="./static/js/file_diff.js"></script>
 
 </html>

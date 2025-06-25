@@ -1,4 +1,0 @@
-This is a file
-It has still four lines
-and a
-trailing new line

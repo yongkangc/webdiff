@@ -59,9 +59,6 @@ docs/_build/
 
 node_modules
 *.ipynb
-webdiff/static/components
-webdiff/static/js/file_diff.js
-webdiff/static/js/file_diff.js.map
 
 wheelhouse
 .vscode
